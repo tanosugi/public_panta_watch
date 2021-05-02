@@ -1,0 +1,51 @@
+{
+  "python.pythonPath": "server/.venv/bin/python3.8",
+  "python.formatting.blackPath": "server/.venv/bin/black",
+  "eslint.workingDirectories": ["client/src"],
+  "python.formatting.blackArgs": [
+    "--config",
+    "server/pyproject.toml",
+    "--verbose"
+  ],
+  "python.autoComplete.extraPaths": [
+    "./server"
+  ],
+  "cSpell.words": [
+    "Fama",
+    "MYPROFILE",
+    "PCAP",
+    "PSQL",
+    "RGDPUS",
+    "TTFB",
+    "YYYYMMDD",
+    "airbnb",
+    "astype",
+    "clsx",
+    "dropna",
+    "econdb",
+    "empl",
+    "famafrench",
+    "fillna",
+    "graphiql",
+    "isort",
+    "moex",
+    "mypy",
+    "naver",
+    "ossp",
+    "pddr",
+    "pgsql",
+    "pipenv",
+    "postgres",
+    "psql",
+    "pytest",
+    "quandl",
+    "railac",
+    "repos",
+    "stooq",
+    "tiingo",
+    "tolist",
+    "unfollow",
+    "unregister",
+    "yfinance"
+  ]
+}

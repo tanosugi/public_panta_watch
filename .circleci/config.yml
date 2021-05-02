@@ -1,0 +1,507 @@
+orbs:
+  slack: circleci/slack@4.4.0
+  aws-cli: circleci/aws-cli@2.0.0
+  docker: circleci/docker@1.5.0
+  aws-ecr: circleci/aws-ecr@6.15.3
+  aws-ecs: circleci/aws-ecs@2.1.0
+version: 2.1
+###################### #
+references:
+  docker_hub_authentication: &docker_hub_authentication
+    auth:
+      username: $DOCKERHUB_USER
+      password: $DOCKERHUB_PASSWORD
+#######################
+executors:
+  node-executor:
+    docker:
+      - image: cimg/node:16.0.0
+        <<: *docker_hub_authentication
+  docker-executor:
+    docker:
+      - image: circleci/docker:latest
+        <<: *docker_hub_authentication
+  terraform-executor:
+    docker:
+      - image: hashicorp/terraform:latest
+        <<: *docker_hub_authentication
+  python-executor:
+    docker:
+      - image: cimg/python:3.9.1
+        <<: *docker_hub_authentication
+#######################
+aliases:
+  - &branch-only-dev-stg-prod
+    branches:
+      only:
+        - develop
+        - staging
+        - master
+  - &install-curl-and-jq
+    run:
+      command: apk update && apk add curl && apk add jq
+  - &get-commit-message
+    run:
+      command: |
+        echo 'export COMMIT_MESSAGE=$(git log -1 HEAD --pretty=format:%s)' >> $BASH_ENV
+  - &slack-notify-if-fail
+    slack/notify:
+      event: fail
+      custom: |
+        {
+          "blocks": [
+            {
+              "type": "section",
+              "text": {
+                "type": "mrkdwn",
+                "text": ":cry: *Fail!*"
+              }
+            },
+            {
+              "type": "section",
+              "fields": [
+                {
+                  "type": "mrkdwn",
+                  "text": "*Project:*\n${CIRCLE_PROJECT_REPONAME}"
+                },
+                {
+                  "type": "mrkdwn",
+                  "text": "*When:*\n$(TZ=Asia/Tokyo date +'%Y/%m/%d %T')"
+                },
+                {
+                  "type": "mrkdwn",
+                  "text": "*Job:*\n${CIRCLE_JOB}"
+                },
+                {
+                  "type": "mrkdwn",
+                  "text": "*Author:*\n${CIRCLE_USERNAME}"
+                },
+                {
+                  "type": "mrkdwn",
+                  "text": "*Branch:*\n${CIRCLE_BRANCH}"
+                },
+                {
+                  "type": "mrkdwn",
+                  "text": "*Commit Msg:*\n${COMMIT_MESSAGE}"
+                }
+              ]
+            },
+            {
+              "type": "actions",
+              "elements": [
+                {
+                  "type": "button",
+                  "text": {
+                    "type": "plain_text",
+                    "text": "View Job"
+                  },
+                  "url": "${CIRCLE_BUILD_URL}"
+                }
+              ]
+            }
+          ]
+        }
+  - &slack-notify-success
+    slack/notify:
+      event: pass
+      custom: |
+        {
+          "blocks": [
+            {
+              "type": "section",
+              "text": {
+                "type": "mrkdwn",
+                "text": ":tada::tada::tada: *Success!*"
+              }
+            },
+            {
+              "type": "section",
+              "fields": [
+                {
+                  "type": "mrkdwn",
+                  "text": "*Project:*\n${CIRCLE_PROJECT_REPONAME}"
+                },
+                {
+                  "type": "mrkdwn",
+                  "text": "*When:*\n$(TZ=Asia/Tokyo date +'%Y/%m/%d %T')"
+                },
+                {
+                  "type": "mrkdwn",
+                  "text": "*Job:*\n${CIRCLE_JOB}"
+                },
+                {
+                  "type": "mrkdwn",
+                  "text": "*Author:*\n${CIRCLE_USERNAME}"
+                },
+                {
+                  "type": "mrkdwn",
+                  "text": "*Branch:*\n${CIRCLE_BRANCH}"
+                },
+                {
+                  "type": "mrkdwn",
+                  "text": "*Commit Msg:*\n${COMMIT_MESSAGE}"
+                }
+              ]
+            },
+            {
+              "type": "actions",
+              "elements": [
+                {
+                  "type": "button",
+                  "text": {
+                    "type": "plain_text",
+                    "text": "View Job"
+                  },
+                  "url": "${CIRCLE_BUILD_URL}"
+                }
+              ]
+            }
+          ]
+        }
+#######################
+commands:
+  attach_workspace_slack_if_fail:
+    parameters:
+      after-deps:
+        type: steps
+        default: []
+    steps:
+      - attach_workspace:
+          at: ./
+      - run: cat .env >> $BASH_ENV
+      - *get-commit-message
+      - steps: << parameters.after-deps >>
+      - *slack-notify-if-fail
+#######################
+jobs:
+  decode-dotenv-file:
+    executor: node-executor
+    steps:
+      - checkout
+      - run:
+          name: Decode dotenv file
+          command: |
+            echo $ENV_FILE | base64 --decode --ignore-garbage > .env
+            cat .env >> $BASH_ENV
+            chmod +x ./create_dotenv.sh
+            . .env
+            . ./create_dotenv.sh > ./.env4scp
+      - persist_to_workspace:
+          root: ./
+          paths: .
+  terraform-saving:
+    executor: terraform-executor
+    steps:
+      - *install-curl-and-jq
+      - attach_workspace_slack_if_fail:
+          after-deps:
+            - run: cat .env >> $BASH_ENV
+            - run:
+                name: Terraform Validate & Format
+                command: |
+                  printenv 
+                  cd infrastructure-saving/
+                  terraform init -backend=false
+                  terraform validate
+                  terraform fmt -check
+            - run:
+                name: Copy Infrastructure Folder
+                command: |
+                  mkdir -p artifacts
+                  cp -r infrastructure-saving artifacts/infrastructure-saving
+            - run:
+                name: Terraform Plan
+                command: |
+                  . ./.env
+                  cd artifacts/infrastructure-saving/
+                  terraform init
+                  terraform workspace select ${CIRCLE_BRANCH} || terraform workspace new ${CIRCLE_BRANCH}
+                  terraform plan -target aws_acm_certificate.cert
+                # terraform plan -target  aws_acm_certificate.cert
+            - run:
+                name: Terraform Apply
+                command: |
+                  . ./.env
+                  echo $TF_VAR_DEVELOP_SAVING
+                  cd artifacts/infrastructure-saving/
+                  terraform workspace select ${CIRCLE_BRANCH}
+                  terraform apply -target=aws_acm_certificate.cert -auto-approve
+                  terraform apply -auto-approve
+                  terraform output ec2_public_ip > ../ec2_public_ip.txt
+                  terraform output bucket_name > ../bucket_name.txt
+                  terraform output cloudfront_distribution_id > ../cloudfront_distribution_id.txt
+            - persist_to_workspace:
+                root: ./
+                paths:
+                  - artifacts
+  terraform-saving-destroy:
+    executor: terraform-executor
+    steps:
+      - *install-curl-and-jq
+      - attach_workspace_slack_if_fail:
+          after-deps:
+            - run:
+                name: Terraform Destroy
+                command: |
+                  cd infrastructure-saving/
+                  terraform init
+                  terraform workspace select ${CIRCLE_BRANCH} || terraform workspace new ${CIRCLE_BRANCH}
+                  terraform destroy -auto-approve
+  client-install-dependencies:
+    executor: node-executor
+    steps:
+      - attach_workspace_slack_if_fail:
+          after-deps:
+            - restore_cache:
+                key: client--{{ checksum "client/package-lock.json" }}
+            - run:
+                working_directory: client
+                name: Install dependencies
+                command: |
+                  dir --all
+                  echo a
+                  dir .. --all
+                  npm install
+            - save_cache:
+                key: client--{{ checksum "client/package-lock.json" }}
+                paths:
+                  - node_modules
+            - persist_to_workspace:
+                root: ./
+                paths: client/node_modules
+            # - store_artifacts:
+            #     path: ..
+            #     destination: artifact-file
+  client-lint-and-prettier:
+    executor: node-executor
+    steps:
+      - attach_workspace_slack_if_fail:
+          after-deps:
+            - run:
+                working_directory: client
+                name: Run linting
+                command: dir --all; npm run lint:check
+            - run:
+                working_directory: client
+                name: Run prettier check after success of linting
+                command: npm run prettier:check
+            - run:
+                working_directory: client
+                name: Run prettier check after fail of linting
+                command: npm run prettier:check
+                when: on_fail
+  client-test:
+    executor: node-executor
+    steps:
+      - attach_workspace_slack_if_fail:
+          after-deps:
+            - run:
+                working_directory: client
+                name: Run unit test
+                # command: npm run test
+                command: echo no test
+  client-build:
+    executor: node-executor
+    steps:
+      - attach_workspace_slack_if_fail:
+          after-deps:
+            - run:
+                command: |
+                  echo 'export REACT_APP_CIRCLE_BRANCH=${CIRCLE_BRANCH}' >> $BASH_ENV
+                  echo $CIRCLE_BRANCH
+                  echo $BASH_ENV
+            - run:
+                working_directory: client
+                name: Build-Project
+                command: |
+                  cp ../.env .env
+                  CI=false npm run build
+            - persist_to_workspace:
+                root: ./
+                paths:
+                  - client/build
+  client-deploy:
+    executor: node-executor
+    steps:
+      - attach_workspace_slack_if_fail:
+          after-deps:
+            - aws-cli/setup
+            # - run:
+            #     name: Installing AWS CLI
+            #     working_directory: /
+            #     command: |
+            #       sudo apt-get -y -qq update
+            #       sudo apt-get install -y awscli
+            - run:
+                name: Deploy to AWS S3
+                command: |
+                  AWS_BUCKET_NAME=$(cat artifacts/bucket_name.txt | sed 's/\"//g')
+                  echo $AWS_BUCKET_NAME
+                  aws configure set default.s3.multipart_chunksize 300KB
+                  aws configure set default.s3.use_accelerate_endpoint true
+                  aws --region ${AWS_REGION} s3 sync client/build s3://${AWS_BUCKET_NAME} --delete
+            - run:
+                name: Deploy to AWS Cloudfront
+                command: |
+                  CLOUDFRONT_DISTRIBUTION_ID=$(cat artifacts/cloudfront_distribution_id.txt | sed 's/\"//g')
+                  echo $CLOUDFRONT_DISTRIBUTION_ID
+                  aws configure set preview.cloudfront true
+                  aws cloudfront create-invalidation --distribution-id ${CLOUDFRONT_DISTRIBUTION_ID} --paths /\*
+  server-flake8:
+    executor: python-executor
+    steps:
+      - attach_workspace_slack_if_fail:
+          after-deps:
+            - restore_cache:
+                key: server-{{ checksum "server/poetry.lock" }}
+            - run:
+                name: Install Dependencies
+                working_directory: server
+                command: |
+                  poetry config virtualenvs.in-project true
+                  dir --all
+                  poetry install
+                  dir --all
+            - run:
+                name: Flake8
+                working_directory: server
+                command: |
+                  poetry run flake8 .
+            - save_cache:
+                key: server-{{ checksum "server/poetry.lock" }}
+                paths:
+                  - server/.venv
+  server-test:
+    executor: python-executor
+    steps:
+      - attach_workspace_slack_if_fail:
+          after-deps:
+            - run:
+                command: echo a
+  server-build:
+    executor: node-executor
+    steps:
+      - attach_workspace_slack_if_fail:
+          after-deps:
+            - setup_remote_docker:
+                version: 19.03.13
+            - docker/install-docker-compose
+            - aws-cli/setup
+            - aws-ecr/ecr-login
+            - run:
+                command: DOCKER_BUILDKIT=1 COMPOSE_DOCKER_CLI_BUILD=1 docker-compose build  --build-arg BUILDKIT_INLINE_CACHE=1
+            - run:
+                name: Tag docker images
+                command: |
+                  docker tag $AWS_ECR_REPO_DJANGO:latest $AWS_ECR_REPO_DJANGO:${CIRCLE_BRANCH}_latest
+                  docker tag $AWS_ECR_REPO_NGINX:latest $AWS_ECR_REPO_NGINX:${CIRCLE_BRANCH}_latest
+                  docker tag $AWS_ECR_REPO_POSTGRES:latest $AWS_ECR_REPO_POSTGRES:${CIRCLE_BRANCH}_latest
+            - aws-ecr/push-image:
+                repo: pandatch_django
+                tag: ${CIRCLE_BRANCH}_latest,latest
+            - aws-ecr/push-image:
+                repo: pandatch_nginx
+                tag: ${CIRCLE_BRANCH}_latest,latest
+            - aws-ecr/push-image:
+                repo: pandatch_postgres
+                tag: ${CIRCLE_BRANCH}_latest,latest
+  server-deploy-saving:
+    executor: node-executor
+    steps:
+      - attach_workspace_slack_if_fail:
+          after-deps:
+            - add_ssh_keys:
+                fingerprints:
+                  - "${KEY_FINGERPRINT_SAVING}"
+            - run:
+                name: Upload Files
+                command: |
+                  EC2_PUBLIC_IP=$(cat artifacts/ec2_public_ip.txt | sed 's/\"//g')
+                  echo $EC2_PUBLIC_IP
+                  ssh -o StrictHostKeyChecking=no ec2-user@${EC2_PUBLIC_IP} "mkdir -p work"
+                  scp -o StrictHostKeyChecking=no ./docker-compose-no-build.yml  ec2-user@${EC2_PUBLIC_IP}:work/docker-compose-no-build.yml
+                  scp -o StrictHostKeyChecking=no ./.env4scp  ec2-user@${EC2_PUBLIC_IP}:work/.env
+            - run:
+                name: docker-compose down
+                command: |
+                  EC2_PUBLIC_IP=$(cat artifacts/ec2_public_ip.txt | sed 's/\"//g')
+                  echo $EC2_PUBLIC_IP
+                  ssh -o StrictHostKeyChecking=no ec2-user@${EC2_PUBLIC_IP} "aws ecr get-login-password --region ap-northeast-1 | docker login --username AWS --password-stdin ${AWS_ECR_ACCOUNT_URL}"
+                  ssh -o StrictHostKeyChecking=no ec2-user@${EC2_PUBLIC_IP} "cd work; docker-compose -f docker-compose-no-build.yml down"
+            - run:
+                name: docker-compose up
+                command: |
+                  EC2_PUBLIC_IP=$(cat artifacts/ec2_public_ip.txt | sed 's/\"//g')
+                  echo $EC2_PUBLIC_IP
+                  ssh -o StrictHostKeyChecking=no ec2-user@${EC2_PUBLIC_IP} "cd work; docker-compose -f docker-compose-no-build.yml pull"
+                  ssh -o StrictHostKeyChecking=no ec2-user@${EC2_PUBLIC_IP} "cd work; docker-compose -f docker-compose-no-build.yml up -d"
+            - run:
+                command: sleep 10s
+            - run:
+                name: docker-compose down
+                command: |
+                  EC2_PUBLIC_IP=$(cat artifacts/ec2_public_ip.txt | sed 's/\"//g')
+                  echo $EC2_PUBLIC_IP
+                  ssh -o StrictHostKeyChecking=no ec2-user@${EC2_PUBLIC_IP} "cd work; docker-compose -f docker-compose-no-build.yml down"
+            - run:
+                name: docker-compose up
+                command: |
+                  EC2_PUBLIC_IP=$(cat artifacts/ec2_public_ip.txt | sed 's/\"//g')
+                  echo $EC2_PUBLIC_IP
+                  ssh -o StrictHostKeyChecking=no ec2-user@${EC2_PUBLIC_IP} "cd work; docker-compose -f docker-compose-no-build.yml up -d"
+  slack-notify-success:
+    docker:
+      - image: "cimg/base:stable"
+    steps:
+      - attach_workspace_slack_if_fail:
+          after-deps:
+            - *slack-notify-success
+#######################
+workflows:
+  build_and_deploy:
+    jobs:
+      ########## dotenv ##########
+      - decode-dotenv-file
+      ########## terraform ##########
+      - terraform-saving:
+          requires:
+            - decode-dotenv-file
+      ########## client ##########
+      - client-install-dependencies:
+          requires:
+            - decode-dotenv-file
+      - client-lint-and-prettier:
+          requires:
+            - client-install-dependencies
+      - client-test:
+          requires:
+            - client-install-dependencies
+      - client-build:
+          requires:
+            - client-install-dependencies
+      - client-deploy:
+          requires:
+            - client-lint-and-prettier
+            - client-test
+            - client-build
+            - terraform-saving
+      ########## backend-saving ##########
+      - server-flake8:
+          requires:
+            - decode-dotenv-file
+      - server-test:
+          requires:
+            - server-flake8
+      - server-build:
+          requires:
+            - server-flake8
+      - server-deploy-saving:
+          requires:
+            - server-build
+            - server-test
+            - terraform-saving
+      ########## slack-notify-success ##########
+      - slack-notify-success:
+          requires:
+            - client-deploy
+            - server-deploy-saving

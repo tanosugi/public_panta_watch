@@ -1,0 +1,28 @@
+version: "3.8"
+
+services:
+  postgres:
+    container_name: pandatch_postgres
+    image: $AWS_ECR_REPO_POSTGRES
+    ports:
+      - "5432:5432"
+    volumes:
+      - ./.db-data:/var/lib/postgresql/data
+    env_file: ./.env
+    hostname: pandatch_postgres
+
+  django:
+    container_name: pandatch_django
+    image: $AWS_ECR_REPO_DJANGO
+    expose:
+      - "8001"
+    depends_on:
+      - postgres
+    env_file: ./.env
+  nginx:
+    container_name: pandatch_nginx
+    image: $AWS_ECR_REPO_NGINX
+    ports:
+      - "80:80"
+    depends_on:
+      - django

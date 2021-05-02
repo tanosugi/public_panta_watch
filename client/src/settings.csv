@@ -1,0 +1,16 @@
+id,shortName,name,initialInputForSymbol,icon,method,needApiKey,period,payload
+1,fred,FRED,GDP,../assets/icon/fred.ico,data,false,datetime,
+2,stooq,Stooq,GOOG,../assets/icon/fred.ico,data,false,datetime,
+3,tiingo,Tiingo,GOOG,../assets/icon/fred.ico,pdr,true,datetime,
+4,iex,IEX,GOOG,../assets/icon/fred.ico,data,true,datetime,
+5,av-daily,AlphaVantage,GOOG,../assets/icon/fred.ico,data,true,datetime,
+6,econdb,Econdb,ticker=RGDPUS,../assets/icon/fred.ico,data,false,datetime,
+7,quandl,Quandl,SBJ/0307,../assets/icon/fred.ico,data,false,datetime,
+8,famafrench,Fama-French Data,5_Industry_Portfolios,../assets/icon/fred.ico,data,false,datetime,
+9,wb,World Bank,NY.GDP.PCAP.KD,../assets/icon/fred.ico,pdr.wb,false,-,country
+10,oecd,OECD,TUD,../assets/icon/fred.ico,data,false,datetime,
+11,eurostat,Eurostat,tran_sf_railac,../assets/icon/fred.ico,data,false,datetime,
+12,nasdaq,NASDAQ,,../assets/icon/fred.ico,data,false,datetime,
+13,moex,Moscow Exchange,USD000UTSTOM,../assets/icon/fred.ico,data,false,datetime,
+14,naver,Naver Finance,005930,../assets/icon/fred.ico,data,false,datetime,
+15,yfinance,Yahoo Finance,GOOG,../assets/icon/fred.ico,pdr.get_data_yahoo,false,yyyy-mm-dd,
